@@ -7,10 +7,10 @@ from ..writers.file_writer import FileWriter
 import logging
 
 class JSONWriter:
-    def __init__(self, config: ConverterConfig):
+    def __init__(self, config: ConverterConfig, logger: logging.Logger):
         self.config = config
-        self.file_writer = FileWriter(config)
-        self.logger = logging.getLogger('HDXConverter')
+        self.logger = logger
+        self.file_writer = FileWriter(config, self.logger)
 
     def save_metadata(self, metadata: ArticleMetadata, output_dir: Path) -> Optional[Path]:
         """Сохранение метаданных в JSON файл"""

@@ -23,7 +23,7 @@ class HDXLogger:
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(formatter)
 
-        # === ИСПРАВЛЕНИЕ: Настройка уровня файлового лога согласно verbose_level ===
+        # Настройка уровня файлового лога согласно verbose_level
         if self.verbose_level == 0:  # silent
             file_handler.setLevel(logging.ERROR)
         elif self.verbose_level == 1:  # short
@@ -32,7 +32,6 @@ class HDXLogger:
             file_handler.setLevel(logging.INFO)
         else:  # debug (v3)
             file_handler.setLevel(logging.DEBUG)
-        # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
         # Консольный обработчик - уровень зависит от verbose_level
         console_handler = logging.StreamHandler()

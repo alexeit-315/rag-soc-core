@@ -1,10 +1,12 @@
 import shutil
 from pathlib import Path
 from typing import Optional
+import logging
 
 class HTMLBackupWriter:
-    def __init__(self, config):
+    def __init__(self, config, logger: logging.Logger):
         self.config = config
+        self.logger = logger
     
     def backup_html(self, source_file: Path, base_filename: str, backup_dir: Path) -> bool:
         """Резервное копирование HTML файла"""

@@ -147,30 +147,9 @@ class ContentProcessor:
 
     def _process_section(self, section_div: Tag, source_file: Path) -> Optional[Dict]:
         """Обработка секции (div.section)"""
-        self.logger.debug(f"_process_section: начало обработки секции")
-        self.logger.debug(f"  Содержимое секции: '{section_div.get_text(strip=True)[:200]}...'")
-
-        # Проверяем, есть ли внутри дочерние элементы
-        children_count = len([c for c in section_div.children if isinstance(c, Tag)])
-        self.logger.debug(f"  Дочерних элементов: {children_count}")
-
-        # Ищем заголовки любого уровня h2-h6 с классом sectiontitle
-        header = section_div.find(['h2', 'h3', 'h4', 'h5', 'h6'], class_='sectiontitle')
-        self.logger.debug(f"  Найден заголовок: {header is not None}")
-
+        header = section_div.find(['h4', 'h5', 'h6'], class_='sectiontitle')
         if not header:
-            self.logger.debug(f"Секция без заголовка, обрабатываем весь контент")
-            # Обрабатываем всё содержимое секции
-            section_content = self._collect_element_content(section_div, source_file, "")
-
-            if not section_content:
-                return None
-
-            return {
-                "type": "section",
-                "title": "",  # Пустой заголовок для секций без заголовка
-                "content": section_content
-            }
+            return None
 
         section_title = header.get_text().strip()
 
@@ -1053,39 +1032,28 @@ class ContentProcessor:
     def _process_task_section(self, section_div: Tag, source_file: Path) -> Optional[Dict]:
         """Обработка task-секции (div.context или div.steps-unordered)"""
 
-        # Ищем заголовки любого уровня h2-h6 с классом sectiontitle
-        header = section_div.find(['h2', 'h3', 'h4', 'h5', 'h6'], class_='sectiontitle')
-        # ИЗМЕНЕНИЕ: Если нет заголовка, создаем секцию с пустым заголовком
-        if not header:
-            self.logger.debug(f"Секция без заголовка, обрабатываем весь контент")
-            # Обрабатываем всё содержимое секции
-            section_content = self._collect_element_content(section_div, source_file, "")
+        # Ищем заголовок внутри секции
+        header = section_div.find(['h4', 'h5', 'h6'], class_='sectiontitle')
+        if header:
+            section_title = header.get_text().strip()
+            self.logger.debug(f"Найден заголовок task-секции: '{section_title}'")
+            # УДАЛЯЕМ заголовок из DOM, чтобы он не обрабатывался как текст
+            header.decompose()
+        else:
+            # Если заголовка нет, используем имя класса как заголовок
+            class_name = ' '.join(section_div.get('class', []))
+            if 'context' in class_name:
+                section_title = "Context"
+            elif 'steps-unordered' in class_name:
+                section_title = "Procedure"
+            else:
+                section_title = class_name
 
-            if not section_content:
-                return None
+        # Обрабатываем всё содержимое секции (заголовок уже удален)
+        section_content = self._collect_element_content(section_div, source_file, section_title)
 
-            return {
-                "type": "section",
-                "title": "",  # Пустой заголовок для секций без заголовка
-                "content": section_content
-            }
-
-        section_title = header.get_text().strip()
-
-        # Собираем содержимое секции
-        section_content = []
-        current_element = header.find_next_sibling()
-
-        while current_element and not (current_element.name == 'div' and 'section' in current_element.get('class', [])):
-            element_data = self._process_element(current_element, source_file, section_title)
-            if element_data:
-                if isinstance(element_data, list):
-                    section_content.extend(element_data)
-                else:
-                    section_content.append(element_data)
-
-            current_element = current_element.find_next_sibling()
-        # ИЗМЕНЕНИЕ КОНЕЦ
+        if not section_content:
+            return None
 
         return {
             "type": "section",

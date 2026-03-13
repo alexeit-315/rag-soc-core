@@ -41,7 +41,6 @@ Examples:
     parser.add_argument('--no-backup', action='store_true',
                        help='Skip HTML backup')
 
-    # === ИСПРАВЛЕНИЕ: Четыре уровня логирования ===
     # Настройки логирования
     log_group = parser.add_mutually_exclusive_group()
     log_group.add_argument('-v0', '--silent', action='store_true',
@@ -52,7 +51,6 @@ Examples:
                        help='Normal mode (default) - info and above to log, errors to console')
     log_group.add_argument('-v3', '--debug', action='store_true',
                        help='Debug mode - debug and above to log, errors to console')
-    # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
     # Настройки валидации
     parser.add_argument('--no-validate', action='store_true',
@@ -62,7 +60,7 @@ Examples:
 
     args = parser.parse_args()
 
-    # === ИСПРАВЛЕНИЕ: Определение verbose_level ===
+    # Определение verbose_level
     verbose_level = 2  # по умолчанию normal
     if args.silent:
         verbose_level = 0
@@ -72,7 +70,6 @@ Examples:
         verbose_level = 2
     elif args.debug:
         verbose_level = 3
-    # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
     # Проверка входного файла
     if not args.hdx_file.exists() and not args.skip_extract:
@@ -104,23 +101,19 @@ Examples:
         log_level="DEBUG"  # Логгер сам управляет уровнями через verbose_level
     )
 
-    # === ИСПРАВЛЕНИЕ: Вывод версии в консоль и подготовка к записи в лог ===
+    # Вывод версии в консоль
     version_msg = f"HDX Converter v.{__version__} {__year__} - {__author__}"
     print(version_msg)
-    # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
     # Создание и запуск конвертера
     try:
         from .utils.logger import HDXLogger
         # === ИСПРАВЛЕНИЕ: Передаем verbose_level в логгер ===
         logger = HDXLogger(config, verbose_level).get_logger()
-        # === КОНЕЦ ИСПРАВЛЕНИЯ ===
-
-        # === ИСПРАВЛЕНИЕ: Запись версии в лог ===
         logger.info(version_msg)
         # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
-        converter = HDXConverter(config)
+        converter = HDXConverter(config, logger)
         converter.convert(args.hdx_file)
 
         # Проверка наличия ошибок для кода возврата

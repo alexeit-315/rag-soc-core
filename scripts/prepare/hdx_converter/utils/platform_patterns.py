@@ -19,9 +19,9 @@ from typing import List, Dict, Tuple, Set
 # Регулярные выражения для извлечения серий продуктов
 PRODUCT_SERIES_PATTERNS = [
     r'USG\d+[A-Z]+',          # USG серии (USG6000F, USG6600F)
-    r'CE\d+[A-Z]*',           # CE серии
-    r'S\d+[A-Z]*',            # S серии
-    r'AR\d+[A-Z]*',           # AR серии
+    r'CE\d{3,}[A-Z\d\-]{0,17}',           # CE серии (минимум 3 цифры)
+    r'S\d{3,}[A-Z\d\-]{0,17}',            # S серии (минимум 3 цифры)
+    r'AR\d{3,}[A-Z\d\-]{0,17}',           # AR серии (минимум 3 цифры)
     r'NetEngine\d+[A-Z]*',    # NetEngine серии
     r'Atlas\d+[A-Z]*',        # Atlas серии
     r'HiSecEngine\d+[A-Z\-]*', # HiSecEngine серии
@@ -32,9 +32,9 @@ PRODUCT_SERIES_PATTERNS = [
 # Регулярные выражения для извлечения совместимых моделей
 COMPATIBLE_MODELS_PATTERNS = [
     r'USG\d+[A-Z\-]+',        # Все модели USG
-    r'CE\d+[A-Z]*\d*[A-Z]*',  # Все модели CE
-    r'S\d+[A-Z]*\d*[A-Z]*',   # Все модели S серии
-    r'AR\d+[A-Z]*\d*[A-Z]*',  # Все модели AR серии
+    r'CE\d{3,}[A-Z\d\-]{0,17}',  # Все модели CE (минимум 3 цифры, общая длина до 20)
+    r'S\d{3,}[A-Z\d\-]{0,17}',   # Все модели S серии (минимум 3 цифры, общая длина до 20)
+    r'AR\d{3,}[A-Z\d\-]{0,17}',  # Все модели AR серии (минимум 3 цифры, общая длина до 20)
     r'NetEngine\s*\d+[A-Z]*', # Все модели NetEngine
     r'Atlas\s*\d+[A-Z]*',     # Все модели Atlas
     r'HiSecEngine\d+[A-Z\-]*',# Все модели HiSecEngine

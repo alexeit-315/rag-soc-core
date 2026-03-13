@@ -4,9 +4,10 @@ from typing import Optional, Dict, Any
 from ..writers.file_writer import FileWriter
 
 class TextWriter:
-    def __init__(self, config):
+    def __init__(self, config, logger: logging.Logger = None):
         self.config = config
-        self.file_writer = FileWriter(config)
+        self.logger = logger
+        self.file_writer = FileWriter(config, self.logger)
     
     def format_text_content(self, title: str, content: str, navigation: str = "") -> str:
         """Форматирование текстового контента"""
@@ -38,8 +39,7 @@ class TextWriter:
 
     def format_structured_content(self, structured_data: Dict[str, Any], navigation: str) -> str:
         """Форматирование структурированных данных в текст - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
-        logger = logging.getLogger('HDXConverter')
-        logger.debug("=== ФОРМАТИРОВАНИЕ STRUCTURED_DATA В ТЕКСТ ===")
+        self.logger.debug("=== ФОРМАТИРОВАНИЕ STRUCTURED_DATA В ТЕКСТ ===")
 
         text_parts = []
 
@@ -47,7 +47,7 @@ class TextWriter:
         article_title = structured_data.get("metadata", {}).get("article_title", "")
         if article_title:
             text_parts.append(f"# {article_title}\n")
-            logger.debug(f"Добавлен заголовок: {article_title}")
+            self.logger.debug(f"Добавлен заголовок: {article_title}")
 
         # Рекурсивная обработка контента
         def process_element(element, indent=0):
@@ -73,6 +73,65 @@ class TextWriter:
                         text_parts.append("="*50 + "\n")
                         text_parts.append(content + "\n")
                     # === КОНЕЦ ИСПРАВЛЕНИЯ ===
+
+                # === НОВОЕ ИСПРАВЛЕНИЕ: Обработка таблиц ===
+                elif element_type == "table":
+                    caption = element.get("caption", "")
+                    header = element.get("header", [])
+                    rows = element.get("rows", [])
+
+                    # Добавляем заголовок таблицы, если есть
+                    if caption:
+                        text_parts.append(f"\n{caption}\n")
+                        text_parts.append("-" * len(caption) + "\n")
+
+                    # Определяем ширину колонок
+                    col_widths = []
+                    if header:
+                        col_widths = [len(h) for h in header]
+                        for row in rows:
+                            for i, cell in enumerate(row):
+                                if i < len(col_widths):
+                                    col_widths[i] = max(col_widths[i], len(cell))
+                                else:
+                                    col_widths.append(len(cell))
+                    elif rows:
+                        # Если нет заголовка, определяем ширину по данным
+                        for row in rows:
+                            for i, cell in enumerate(row):
+                                if i < len(col_widths):
+                                    col_widths[i] = max(col_widths[i], len(cell))
+                                else:
+                                    col_widths.append(len(cell))
+
+                    # Формируем разделитель
+                    separator = "+" + "+".join(["-" * (w + 2) for w in col_widths]) + "+"
+
+                    # Выводим заголовок, если есть
+                    if header:
+                        text_parts.append(separator + "\n")
+                        header_line = "|"
+                        for i, h in enumerate(header):
+                            header_line += f" {h:<{col_widths[i]}} |"
+                        text_parts.append(header_line + "\n")
+                        text_parts.append(separator + "\n")
+
+                    # Выводим строки данных
+                    for row in rows:
+                        row_line = "|"
+                        for i, cell in enumerate(row):
+                            if i < len(col_widths):
+                                row_line += f" {cell:<{col_widths[i]}} |"
+                            else:
+                                row_line += f" {cell} |"
+                        text_parts.append(row_line + "\n")
+
+                    if rows and not header:
+                        text_parts.append(separator + "\n")
+
+                    text_parts.append("\n")
+                    self.logger.debug(f"Добавлена таблица в текст: caption='{caption}', колонок={len(header)}, строк={len(rows)}")
+                # === КОНЕЦ НОВОГО ИСПРАВЛЕНИЯ ===
 
                 elif element_type == "paragraph":
                     content_data = element.get("content", "")
@@ -122,7 +181,7 @@ class TextWriter:
         # Навигация уже обработана из structured_data
         # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
-        logger.debug(f"=== ЗАВЕРШЕНО ФОРМАТИРОВАНИЕ STRUCTURED_DATA ===")
-        logger.debug(f"Размер текстового контента: {len(''.join(text_parts))} символов")
+        self.logger.debug(f"=== ЗАВЕРШЕНО ФОРМАТИРОВАНИЕ STRUCTURED_DATA ===")
+        self.logger.debug(f"Размер текстового контента: {len(''.join(text_parts))} символов")
 
         return ''.join(text_parts)

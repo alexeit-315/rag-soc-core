@@ -45,9 +45,9 @@ except ImportError:
     tqdm = lambda x, **kwargs: x
 
 class HDXConverter:
-    def __init__(self, config: ConverterConfig):
+    def __init__(self, config: ConverterConfig, logger: logging.Logger):
         self.config = config
-        self.logger = HDXLogger(config).get_logger()
+        self.logger = logger
         
         # Создание директорий
         self._create_directories()
@@ -77,20 +77,21 @@ class HDXConverter:
             config,
             self.path_resolver,
             self.image_processor,
-            resolve_link_callback=self._resolve_link_target  # ДОБАВЛЕНО
+            resolve_link_callback=self._resolve_link_target,
+            logger=self.logger
         )
-        self.validator = MetadataValidator(config)
+        self.validator = MetadataValidator(config, logger=self.logger)
 
         # === ИСПРАВЛЕНИЕ: Передаем stats_collector в ImageProcessor после его создания ===
         self.image_processor.stats_collector = self.stats_collector
         # === КОНЕЦ ИСПРАВЛЕНИЯ ===
         
         # Инициализация писателей
-        self.file_writer = FileWriter(config)
-        self.json_writer = JSONWriter(config)
-        self.markdown_writer = MarkdownWriter(config)
-        self.text_writer = TextWriter(config)
-        self.html_backup_writer = HTMLBackupWriter(config)
+        self.file_writer = FileWriter(config, logger=self.logger)
+        self.json_writer = JSONWriter(config, logger=self.logger)
+        self.markdown_writer = MarkdownWriter(config, logger=self.logger)
+        self.text_writer = TextWriter(config, logger=self.logger)
+        self.html_backup_writer = HTMLBackupWriter(config, logger=self.logger)
         
         # Хранилища данных
         self.filename_mapping: Dict[str, Dict] = {}

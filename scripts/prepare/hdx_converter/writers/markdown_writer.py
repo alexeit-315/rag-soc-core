@@ -6,9 +6,10 @@ from typing import Optional, List, Dict, Any
 from ..writers.file_writer import FileWriter
 
 class MarkdownWriter:
-    def __init__(self, config):
+    def __init__(self, config, logger: logging.Logger = None):
         self.config = config
-        self.file_writer = FileWriter(config)
+        self.logger = logger
+        self.file_writer = FileWriter(config, self.logger)
     
     def convert_to_markdown(self, soup: BeautifulSoup, title: str, content: str,
                            navigation: str, html_file: Path, metadata: dict) -> str:
@@ -500,8 +501,7 @@ class MarkdownWriter:
     def convert_structured_to_markdown(self, structured_data: Dict[str, Any],
                                          navigation: str, html_file: Path, metadata: dict) -> str:
         """Конвертация структурированных данных в Markdown - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
-        logger = logging.getLogger('HDXConverter')
-        logger.debug(f"=== НАЧАЛО КОНВЕРТАЦИИ STRUCTURED_DATA В MARKDOWN ===")
+        self.logger.debug(f"=== НАЧАЛО КОНВЕРТАЦИИ STRUCTURED_DATA В MARKDOWN ===")
 
         md_content = "<!--\n"
 
@@ -519,7 +519,7 @@ class MarkdownWriter:
         article_title = structured_data.get("metadata", {}).get("article_title", "")
         if article_title:
             md_content += f"# {article_title}\n\n"
-            logger.debug(f"Добавлен заголовок статьи: {article_title}")
+            self.logger.debug(f"Добавлен заголовок статьи: {article_title}")
 
         # Рекурсивная обработка контента
         def process_element(element, indent_level=0, in_list=False):
@@ -540,7 +540,7 @@ class MarkdownWriter:
                     # ИСПРАВЛЕНИЕ: пропускаем секцию навигации, так как она добавляется отдельно
                     if title and title not in ["Навигация", "Navigation"]:
                         md_content += f"\n{'#' * header_level} {title}\n\n"
-                        logger.debug(f"Добавлена секция: {title} (уровень {header_level})")
+                        self.logger.debug(f"Добавлена секция: {title} (уровень {header_level})")
 
                     for item in content:
                         process_element(item, indent_level + 1, False)
@@ -550,8 +550,32 @@ class MarkdownWriter:
                     content = element.get("content", "")
                     if content:
                         md_content += f"\n\n## Navigation\n\n{content}\n"
-                        logger.debug(f"Добавлена навигация из structured_data")
+                        self.logger.debug(f"Добавлена навигация из structured_data")
                     # === КОНЕЦ ИСПРАВЛЕНИЯ ===
+
+                # === НОВОЕ ИСПРАВЛЕНИЕ: Обработка таблиц ===
+                elif element_type == "table":
+                    caption = element.get("caption", "")
+                    header = element.get("header", [])
+                    rows = element.get("rows", [])
+
+                    # Добавляем заголовок таблицы, если есть
+                    if caption:
+                        md_content += f"**{caption}**\n\n"
+
+                    # Формируем Markdown таблицу
+                    if header:
+                        md_content += "| " + " | ".join(header) + " |\n"
+                        md_content += "|" + "|".join([" --- " for _ in header]) + "|\n"
+
+                        for row in rows:
+                            # Убеждаемся, что в строке достаточно элементов
+                            row_data = row[:len(header)] if len(row) > len(header) else row + [""] * (len(header) - len(row))
+                            md_content += "| " + " | ".join(row_data) + " |\n"
+
+                        md_content += "\n"
+                        self.logger.debug(f"Добавлена таблица: caption='{caption}', колонок={len(header)}, строк={len(rows)}")
+                # === КОНЕЦ НОВОГО ИСПРАВЛЕНИЯ ===
 
                 elif element_type == "paragraph":
                     content_data = element.get("content", "")
@@ -561,7 +585,7 @@ class MarkdownWriter:
                         for item in content_data:
                             process_element(item, indent_level, in_list)
                         md_content += "\n"
-                    logger.debug(f"Обработан параграф")
+                    self.logger.debug(f"Обработан параграф")
 
                 elif element_type == "list":
                     list_type = element.get("list_type", "unordered")
@@ -584,7 +608,7 @@ class MarkdownWriter:
                         md_content += "\n"
                     # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
-                    logger.debug(f"Обработан список ({list_type}): {len(items)} элементов")
+                    self.logger.debug(f"Обработан список ({list_type}): {len(items)} элементов")
 
                 elif element_type == "list_item":
                     content_data = element.get("content", [])
@@ -639,7 +663,7 @@ class MarkdownWriter:
                             process_element(item, indent_level, in_list)
                             first = False
 
-                    logger.debug(f"Обработан элемент списка")
+                    self.logger.debug(f"Обработан элемент списка")
 
                 elif element_type == "link":
                     text = element.get("text", "")
@@ -653,7 +677,7 @@ class MarkdownWriter:
                     else:
                         md_content += f"[{text}]({href})"
 
-                    logger.debug(f"Обработана ссылка: {text} -> {href}")
+                    self.logger.debug(f"Обработана ссылка: {text} -> {href}")
 
                 elif element_type == "code_block":
                     content = element.get("content", "")
@@ -664,14 +688,14 @@ class MarkdownWriter:
                         content = str(content)
 
                     md_content += f"\n```{language}\n{content}\n```\n\n"
-                    logger.debug(f"Обработан code_block (язык: {language}, длина: {len(content)} символов)")
+                    self.logger.debug(f"Обработан code_block (язык: {language}, длина: {len(content)} символов)")
 
                 elif element_type == "image":
                     src = element.get("src", "")
                     alt = element.get("alt", "")
 
                     md_content += f"\n![{alt}]({src})\n\n"
-                    logger.debug(f"Обработано изображение: {alt} -> {src}")
+                    self.logger.debug(f"Обработано изображение: {alt} -> {src}")
 
                 elif element_type == "text":
                     content = element.get("content", "")
@@ -680,7 +704,8 @@ class MarkdownWriter:
                 # Рекурсивный обход других полей
                 for key, value in element.items():
                     if key not in ["type", "content", "title", "text", "href", "link_type",
-                                  "navigation_type", "language", "src", "alt", "list_type", "items"]:
+                                  "navigation_type", "language", "src", "alt", "list_type", "items",
+                                  "caption", "header", "rows"]:  # ДОБАВЛЕНО: "caption", "header", "rows"
                         if isinstance(value, (dict, list)):
                             process_element(value, indent_level, in_list)
 
@@ -696,7 +721,7 @@ class MarkdownWriter:
         # Навигация уже обработана из structured_data
         # === КОНЕЦ ИСПРАВЛЕНИЯ ===
 
-        logger.debug(f"=== ЗАВЕРШЕНА КОНВЕРТАЦИИ STRUCTURED_DATA В MARKDOWN ===")
-        logger.debug(f"Размер MD контента: {len(md_content)} символов")
+        self.logger.debug(f"=== ЗАВЕРШЕНА КОНВЕРТАЦИИ STRUCTURED_DATA В MARKDOWN ===")
+        self.logger.debug(f"Размер MD контента: {len(md_content)} символов")
 
         return md_content
