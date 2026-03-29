@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Core index building logic with GPU support
+"""
+
+import os
+import time
+import shutil
+import json
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
+import logging
+
+import chromadb
+import torch
+from sentence_transformers import SentenceTransformer
+
+from ..parsers.json_parser import JSONParser
+from ..core.chunking_strategies import SizeBasedChunking, StructureBasedChunking
+from ..models.schemas import ProcessingStats
+
+
+class IndexBuilder:
+    def __init__(
+        self,
+        source_folder: Path,
+        persist_dir: Path,
+        meta_folder: Optional[Path] = None,
+        model_path: Optional[str] = None,
+        model_name: Optional[str] = None,
+        chunk_size: int = 900,
+        chunk_overlap: int = 150,
+        chunk_by_structure: bool = False,
+        use_cleaner: bool = True,  # kept for compatibility, ignored for JSON
+        device: str = None,  # Новый параметр: 'cuda', 'cpu', или None для автоопределения
+        batch_size: int = None,  # Новый параметр: размер батча для GPU
+        logger: Optional[logging.Logger] = None
+    ):
+        self.source_folder = source_folder
+        self.meta_folder = meta_folder or source_folder
+        self.persist_dir = persist_dir
+        self.model_path = model_path
+        self.model_name = model_name
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.chunk_by_structure = chunk_by_structure
+        self.logger = logger or logging.getLogger(__name__)
+        
+        # GPU настройки
+        self.device = device or self._detect_best_device()
+        self.batch_size = batch_size or self._get_default_batch_size()
+        
+        self.logger.info(f"🎮 Используется устройство: {self.device}")
+        self.logger.info(f"📦 Размер батча: {self.batch_size}")
+        
+        # Инициализация компонентов
+        self.json_parser = JSONParser(self.logger)
+        
+        # Стратегии чанкования
+        self.size_chunker = SizeBasedChunking(chunk_size, chunk_overlap, self.logger)
+        self.structure_chunker = StructureBasedChunking(self.logger)
+        
+        # Модель эмбеддингов (будет загружена позже)
+        self.embed_model = None
+        self.embed_model_name = None
+        
+        # Статистика
+        self.stats = ProcessingStats()
+        
+        # Мониторинг памяти GPU
+        if self.device.startswith('cuda'):
+            self._log_gpu_memory("Инициализация")
+    
+    def _detect_best_device(self) -> str:
+        """Автоматически определяет лучшее доступное устройство"""
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # в GB
+            self.logger.info(f"✅ Найден GPU: {gpu_name} с {gpu_memory:.1f} GB памяти")
+            return "cuda"
+        else:
+            self.logger.info("ℹ️ GPU не найден, используется CPU")
+            return "cpu"
+    
+    def _get_default_batch_size(self) -> int:
+        """Возвращает оптимальный размер батча для текущего устройства"""
+        if self.device.startswith('cuda'):
+            # Для GTX 1650 (4GB) оптимальный размер
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            
+            if gpu_memory >= 8:
+                return 128
+            elif gpu_memory >= 4:
+                return 64  # Для GTX 1650 4GB
+            elif gpu_memory >= 2:
+                return 32
+            else:
+                return 16
+        else:
+            return 32  # для CPU
+    
+    def _log_gpu_memory(self, stage: str):
+        """Логирует использование памяти GPU"""
+        if not self.device.startswith('cuda'):
+            return
+        
+        try:
+            allocated = torch.cuda.memory_allocated(0) / 1024**2
+            cached = torch.cuda.memory_reserved(0) / 1024**2
+            self.logger.debug(f"📊 GPU память [{stage}]: allocated={allocated:.1f}MB, cached={cached:.1f}MB")
+        except:
+            pass
+    
+    def _clear_gpu_memory(self):
+        """Очищает кэш GPU памяти"""
+        if self.device.startswith('cuda'):
+            torch.cuda.empty_cache()
+            self._log_gpu_memory("после очистки")
+    
+    def load_embedding_model(self):
+        """Загружает модель эмбеддингов с поддержкой GPU"""
+        # Сохраняем текущее устройство для логирования
+        self._log_gpu_memory("перед загрузкой модели")
+        
+        try:
+            if self.model_path and os.path.exists(self.model_path):
+                self.logger.info(f"📂 Loading local embedding model from: {self.model_path}")
+                self.embed_model = SentenceTransformer(self.model_path, device=self.device)
+                self.embed_model_name = self.model_path
+            else:
+                model_name = self.model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                self.logger.info(f"🌐 Loading embedding model: {model_name}")
+                self.embed_model = SentenceTransformer(model_name, device=self.device)
+                self.embed_model_name = model_name
+
+            # Проверяем, что модель действительно на нужном устройстве
+            if self.device.startswith('cuda'):
+                self.embed_model = self.embed_model.to(self.device)
+            
+            self.logger.info(f"✅ Embedding model loaded ({self.embed_model_name}), "
+                           f"device={self.device}, dim={self.embed_model.get_sentence_embedding_dimension()}")
+            
+            self._log_gpu_memory("после загрузки модели")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка загрузки модели: {e}")
+            if self.device.startswith('cuda'):
+                self.logger.info("🔄 Пробуем загрузить на CPU...")
+                self.device = "cpu"
+                self.embed_model = SentenceTransformer(self.model_path or model_name, device="cpu")
+    
+    def collect_json_files(self) -> List[Path]:
+        """Собирает все JSON файлы данных в папке source_folder"""
+        json_files = []
+        for p in self.source_folder.iterdir():
+            if p.suffix.lower() == ".json" and self.json_parser.is_data_json(p):
+                json_files.append(p)
+        
+        self.logger.info(f"📁 Found {len(json_files)} JSON content files in {self.source_folder}")
+        return json_files
+    
+    def find_metadata_file(self, content_filename: str) -> Optional[Path]:
+        """Находит соответствующий файл метаданных для файла контента"""
+        metadata_path = self.meta_folder / content_filename
+        
+        if metadata_path.exists():
+            self.logger.debug(f"Found metadata: {metadata_path}")
+            return metadata_path
+        
+        stem = Path(content_filename).stem
+        for p in self.meta_folder.glob(f"*{stem}*.json"):
+            self.logger.debug(f"Found metadata by pattern: {p}")
+            return p
+        
+        self.logger.debug(f"No metadata found for {content_filename}")
+        return None
+    
+    def enrich_metadata_from_json(self, data_json: Dict[str, Any], metadata_json: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Обогащает метаданные из JSON и приводит их к типам, совместимым с ChromaDB"""
+        base_meta = {}
+        
+        # Базовая информация из данных
+        data_metadata = data_json.get("metadata", {})
+        base_meta["source_file"] = str(data_metadata.get("source_file", "unknown"))
+        base_meta["title"] = str(data_metadata.get("article_title", "unknown"))
+        
+        # Расширенная информация из метаданных
+        if metadata_json:
+            # Иерархия
+            hierarchy = metadata_json.get("article", {}).get("hierarchy", [])
+            hierarchy_titles = [str(h.get("title", "")) for h in hierarchy if h.get("title")]
+            base_meta["hierarchy_path"] = " > ".join(hierarchy_titles) if hierarchy_titles else ""
+            
+            # DC Identifier и тип документа
+            base_meta["dc_identifier"] = str(metadata_json.get("article", {}).get("dc_identifier", ""))
+            base_meta["document_type"] = str(metadata_json.get("article", {}).get("document_type", ""))
+            
+            # Технические метаданные
+            tech_meta = metadata_json.get("technical_metadata", {})
+            
+            # Версии прошивок
+            fw_versions = tech_meta.get("firmware_versions", {})
+            versions_str = ""
+            if isinstance(fw_versions, dict):
+                all_versions = fw_versions.get("all_versions", [])
+                primary = fw_versions.get("primary", "")
+                versions = []
+                if primary:
+                    versions.append(str(primary))
+                for v in all_versions:
+                    if v and str(v) not in versions:
+                        versions.append(str(v))
+                versions_str = ", ".join(versions) if versions else ""
+            elif isinstance(fw_versions, list):
+                versions_str = ", ".join([str(v) for v in fw_versions if v])
+            base_meta["firmware_versions"] = versions_str
+            
+            # Платформы
+            platforms = tech_meta.get("platforms", {})
+            platforms_str = ""
+            if isinstance(platforms, dict):
+                compatible = platforms.get("compatible_models", [])
+                product_series = platforms.get("product_series", "")
+                platform_list = []
+                if product_series:
+                    platform_list.append(str(product_series))
+                for p in compatible:
+                    if p and str(p) not in platform_list:
+                        platform_list.append(str(p))
+                platforms_str = ", ".join(platform_list) if platform_list else ""
+            elif isinstance(platforms, list):
+                platforms_str = ", ".join([str(p) for p in platforms if p])
+            base_meta["platforms"] = platforms_str
+            
+            # Связи между статьями
+            relations = metadata_json.get("relations", {})
+            
+            parent = relations.get("parent_article", {})
+            base_meta["parent_article_title"] = str(parent.get("title", ""))
+            base_meta["parent_article_md"] = str(parent.get("md_filename", ""))
+            
+            prev = relations.get("previous_article", {})
+            base_meta["previous_article_title"] = str(prev.get("title", ""))
+            base_meta["previous_article_md"] = str(prev.get("md_filename", ""))
+            
+            nxt = relations.get("next_article", {})
+            base_meta["next_article_title"] = str(nxt.get("title", ""))
+            base_meta["next_article_md"] = str(nxt.get("md_filename", ""))
+        else:
+            # Инициализируем пустыми строками
+            base_meta["hierarchy_path"] = ""
+            base_meta["dc_identifier"] = ""
+            base_meta["document_type"] = ""
+            base_meta["firmware_versions"] = ""
+            base_meta["platforms"] = ""
+            base_meta["parent_article_title"] = ""
+            base_meta["parent_article_md"] = ""
+            base_meta["previous_article_title"] = ""
+            base_meta["previous_article_md"] = ""
+            base_meta["next_article_title"] = ""
+            base_meta["next_article_md"] = ""
+        
+        # Убеждаемся, что все значения - строки
+        clean_meta = {}
+        for key, value in base_meta.items():
+            if value is None:
+                clean_meta[key] = ""
+            elif isinstance(value, (list, dict)):
+                clean_meta[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                clean_meta[key] = str(value)
+        
+        return clean_meta
+    
+    def process_file(self, json_path: Path) -> List[Tuple[str, Dict[str, Any]]]:
+        """Обрабатывает один JSON файл и возвращает чанки"""
+        self.logger.debug(f"Processing {json_path.name}")
+        
+        # Загружаем данные
+        data_json = self.json_parser.load_json_file(json_path)
+        if not data_json:
+            self.stats.files_with_errors.append(str(json_path))
+            return []
+        
+        # Ищем соответствующий файл метаданных
+        metadata_path = self.find_metadata_file(json_path.name)
+        metadata_json = None
+        if metadata_path:
+            metadata_json = self.json_parser.load_metadata(metadata_path)
+            if metadata_json:
+                self.logger.debug(f"Loaded metadata: {metadata_path.name}")
+        
+        # Обогащаем метаданные
+        base_metadata = self.enrich_metadata_from_json(data_json, metadata_json)
+        
+        # Извлекаем секции из структуры
+        sections = self.json_parser.extract_sections(data_json)
+        
+        chunks = []
+        strategy_name = "structure" if self.chunk_by_structure else "size"
+        
+        if self.chunk_by_structure:
+            for chunk_text, chunk_meta in self.structure_chunker.chunk(sections, base_metadata):
+                chunks.append((chunk_text, chunk_meta))
+        else:
+            full_text = "\n\n".join([text for _, text in sections])
+            for chunk_text, chunk_meta in self.size_chunker.chunk(full_text, base_metadata):
+                chunks.append((chunk_text, chunk_meta))
+        
+        self.stats.total_chunks += len(chunks)
+        return chunks
+    
+    def build_index(self) -> bool:
+        """Основной метод построения индекса с поддержкой GPU"""
+        self.logger.info("🔧 Start building index")
+        
+        if not self.source_folder.exists():
+            self.logger.error(f"Source folder not found: {self.source_folder}")
+            return False
+        
+        if not self.meta_folder.exists():
+            self.logger.warning(f"Meta folder not found: {self.meta_folder}, will use source folder only")
+            self.meta_folder = self.source_folder
+        
+        # Загружаем модель эмбеддингов
+        self.load_embedding_model()
+        
+        # Собираем JSON файлы
+        json_files = self.collect_json_files()
+        self.stats.total_files = len(json_files)
+        
+        if not json_files:
+            self.logger.warning("No JSON files found")
+            return False
+        
+        self.logger.info(f"Processing {len(json_files)} files with metadata from {self.meta_folder}")
+        
+        # Обрабатываем все файлы
+        corpus_chunks = []
+        corpus_metas = []
+        
+        for json_path in json_files:
+            try:
+                chunks = self.process_file(json_path)
+                for chunk_text, chunk_meta in chunks:
+                    corpus_chunks.append(chunk_text)
+                    corpus_metas.append(chunk_meta)
+            except Exception as e:
+                self.logger.error(f"Error processing {json_path}: {e}", exc_info=True)
+                self.stats.files_with_errors.append(str(json_path))
+        
+        self.logger.info(f"📦 Total chunks to embed: {len(corpus_chunks)}")
+        
+        if not corpus_chunks:
+            self.logger.error("No chunks generated")
+            return False
+        
+        # Очищаем память перед генерацией эмбеддингов
+        self._clear_gpu_memory()
+        
+        # Генерируем эмбеддинги с оптимизированным батчингом
+        t0 = time.time()
+        self.logger.info(f"🚀 Generating embeddings on {self.device} with batch size {self.batch_size}...")
+        
+        try:
+            embeddings = self.embed_model.encode(
+                corpus_chunks,
+                batch_size=self.batch_size,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                device=self.device
+            )
+            
+            # Для больших наборов данных можно использовать динамический батчинг
+            # embeddings = self.embed_model.encode(
+            #     corpus_chunks,
+            #     batch_size=self.batch_size,
+            #     show_progress_bar=True,
+            #     convert_to_numpy=True,
+            #     normalize_embeddings=True,
+            #     device=self.device,
+            #     # Автоматически уменьшает батч при OOM
+            #     # trust_remote_code=True
+            # )
+            
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() and self.device.startswith('cuda'):
+                self.logger.warning("⚠️ CUDA Out of Memory! Пробуем с меньшим батчем...")
+                self._clear_gpu_memory()
+                
+                # Уменьшаем батч вдвое и пробуем снова
+                self.batch_size = max(1, self.batch_size // 2)
+                self.logger.info(f"📦 Новый размер батча: {self.batch_size}")
+                
+                embeddings = self.embed_model.encode(
+                    corpus_chunks,
+                    batch_size=self.batch_size,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    device=self.device
+                )
+            else:
+                raise e
+        
+        t1 = time.time()
+        self.stats.processing_time = t1 - t0
+        
+        # Логируем скорость
+        chunks_per_second = len(corpus_chunks) / self.stats.processing_time
+        self.logger.info(f"✅ Embeddings: {embeddings.shape} generated in {self.stats.processing_time:.2f}s")
+        self.logger.info(f"⚡ Скорость: {chunks_per_second:.1f} чанков/сек")
+        
+        self._log_gpu_memory("после генерации эмбеддингов")
+        
+        # Сохраняем в Chroma
+        if self.persist_dir.exists():
+            self.logger.info(f"ℹ️ Removing existing index at {self.persist_dir}")
+            shutil.rmtree(self.persist_dir)
+        
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        
+        client = chromadb.PersistentClient(path=str(self.persist_dir))
+        collection = client.get_or_create_collection(
+            name="knowledge_base",
+            metadata={
+                "hnsw:space": "cosine",
+                "model": str(self.embed_model_name),
+                "chunk_size": str(self.chunk_size),
+                "chunk_by_structure": str(self.chunk_by_structure),
+                "embedding_dim": str(self.embed_model.get_sentence_embedding_dimension()),
+                "device": self.device,
+                "batch_size": str(self.batch_size)
+            }
+        )
+        
+        # Добавляем батчами
+        batch = 3000
+        for i in range(0, len(corpus_chunks), batch):
+            end = min(i + batch, len(corpus_chunks))
+            ids = [f"chunk_{j}" for j in range(i, end)]
+            emb_batch = embeddings[i:end].tolist()
+            docs_batch = corpus_chunks[i:end]
+            metas_batch = corpus_metas[i:end]
+            
+            collection.add(
+                ids=ids,
+                embeddings=emb_batch,
+                documents=docs_batch,
+                metadatas=metas_batch
+            )
+            self.logger.info(f"➕ Added batch {i}-{end}")
+        
+        # Финальная очистка
+        self._clear_gpu_memory()
+        
+        self.logger.info(f"🎉 Index built and saved at: {self.persist_dir}")
+        self.logger.info(f"📊 Statistics: total_files={self.stats.total_files}, total_chunks={self.stats.total_chunks}, "
+                        f"errors={len(self.stats.files_with_errors)}, time={self.stats.processing_time:.2f}s")
+        
+        return True

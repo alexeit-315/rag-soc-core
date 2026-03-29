@@ -1,0 +1,56 @@
+src/
+├── __init__.py
+├── api/
+│   ├── __init__.py
+│   ├── app.py                 # FastAPI приложение
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── conversion.py      # Эндпоинты конвертации
+│   │   └── system.py          # Health, metrics
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── requests.py        # Pydantic модели для API
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── job_manager.py     # Управление задачами (in-memory)
+│   │   ├── kafka_producer.py  # Отправка уведомлений в Kafka
+│   │   └── worker.py          # Фоновое выполнение конвертации
+│   └── middleware/
+│       ├── __init__.py
+│       ├── tracing.py         # OpenTelemetry middleware
+│       └── logging.py         # JSON логирование
+├── core/
+│   ├── __init__.py
+│   ├── converter.py          # Основной класс конвертера
+│   ├── metadata_manager.py   # Управление метаданными
+│   ├── content_processor.py  # Обработка контента
+│   ├── validator.py          # Валидация данных
+│   └── stats_collector.py    # Сбор статистики
+├── parsers/
+│   ├── __init__.py
+│   ├── html_parser.py       # Парсинг HTML
+│   ├── metadata_parser.py   # Извлечение метаданных
+│   ├── navigation_parser.py # Обработка навигации
+│   └── link_processor.py    # Обработка ссылок
+├── writers/
+│   ├── __init__.py
+│   ├── file_writer.py       # Запись файлов
+│   ├── json_writer.py       # Запись JSON
+│   ├── markdown_writer.py   # Конвертация в Markdown
+│   ├── text_writer.py       # Конвертация в TXT
+│   └── html_backup_writer.py # Резервное копирование HTML
+├── models/
+│   ├── __init__.py
+│   ├── schemas.py           # Pydantic модели
+│   ├── config.py            # Конфигурация
+│   └── statistics.py        # Модели статистики
+├── utils/
+│   ├── __init__.py
+│   ├── logger.py            # Логирование
+│   ├── file_utils.py        # Работа с файлами
+│   ├── naming_utils.py      # Генерация имен
+│   ├── validation_utils.py  # Утилиты валидации
+│   ├── image_processor.py   # Обработка изображений
+│   ├── platform_patterns.py # Работа с шаблонами платформ и моделей
+│   └── path_resolver.py     # Разрешение путей
+└── cli.py                   # Командный интерфейс

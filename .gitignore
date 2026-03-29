@@ -1,7 +1,5 @@
 models/
 docs/.prompts/
-services/rag-soc-converter/
-services/rag-soc-indexer/
 services/rag-soc-indexer/logs/
 services/rag-soc-indexer/old/
 services/rag-soc-indexer/vector_index_gpu/

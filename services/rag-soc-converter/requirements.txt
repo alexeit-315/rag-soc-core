@@ -1,0 +1,26 @@
+# Existing requirements
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0  # Добавлено! Нужно для BaseSettings
+tqdm>=4.65.0
+markdown>=3.4.0
+html2text>=2020.1.16
+pathlib>=1.0.1
+
+# Дополнительные зависимости, которые могут понадобиться
+colorama>=0.4.6  # для цветного вывода
+typing-extensions>=4.0.0  # для типов
+
+# New requirements for API
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+prometheus-client>=0.19.0
+kafka-python>=2.0.2
+
+# OpenTelemetry (optional, for Tier 2)
+# opentelemetry-api>=1.21.0
+# opentelemetry-sdk>=1.21.0
+# opentelemetry-instrumentation-fastapi>=0.42b0
+# opentelemetry-exporter-otlp>=1.21.0
